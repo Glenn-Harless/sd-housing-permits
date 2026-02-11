@@ -1,0 +1,19 @@
+[project]
+name = "sd-housing-permits"
+version = "0.1.0"
+description = "San Diego development & housing permits analysis and dashboard"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=1.1",
+    "httpx>=0.27",
+    "streamlit>=1.40",
+    "plotly>=5.18",
+    "pyarrow>=17.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "fastmcp>=2.12",
+]
+
+[project.scripts]
+permits-build = "pipeline.build:main"
+permits-mcp = "api.mcp_server:main"
