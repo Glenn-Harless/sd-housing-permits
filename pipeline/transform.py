@@ -377,7 +377,7 @@ def _build_aggregations(con: duckdb.DuckDBPyConnection) -> None:
         COPY (
             SELECT
                 year, month, zip_code, permit_count,
-                SUM(permit_count) OVER (ORDER BY year, month) AS cumulative_total
+                SUM(permit_count) OVER (PARTITION BY zip_code ORDER BY year, month) AS cumulative_total
             FROM (
                 SELECT
                     approval_year AS year,

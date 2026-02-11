@@ -1,7 +1,7 @@
 # San Diego Development & Housing Permits Pipeline
 
 ## Overview
-Track where San Diego is building by analyzing development permit data. Visualize construction activity, solar adoption, and permit approval timelines to assess whether the region is on track to meet its housing goals (~172K new homes by 2029).
+Track where San Diego is building by analyzing development permit data. Visualize construction activity, solar adoption, and permit approval timelines to assess whether the city is on track to meet its housing goals (108,036 units — San Diego City's 6th cycle RHNA allocation, 2021-2029).
 
 ## Key Questions
 - Is permit activity tracking toward the regional housing goal?
