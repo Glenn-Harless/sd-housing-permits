@@ -8,11 +8,13 @@ import httpx
 
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 
+# San Diego consolidated the former set1 (legacy) and set2 (current) permit
+# datasets into a single dataset split by status (active/closed). The old set1
+# and set2 URLs now both 301-redirect to the SAME two files, so we fetch only the
+# two distinct ones (active + closed) to avoid downloading and counting duplicates.
 SOURCES: dict[str, str] = {
-    "set1_active": "https://seshat.datasd.org/development_permits_set1/permits_set1_active_datasd.csv",
-    "set1_closed": "https://seshat.datasd.org/development_permits_set1/permits_set1_closed_datasd.csv",
-    "set2_active": "https://seshat.datasd.org/development_permits_set2/permits_set2_active_datasd.csv",
-    "set2_closed": "https://seshat.datasd.org/development_permits_set2/permits_set2_closed_datasd.csv",
+    "active": "https://seshat.datasd.org/development_permits_set1/permits_set1_active_datasd.csv",
+    "closed": "https://seshat.datasd.org/development_permits_set1/permits_set1_closed_datasd.csv",
     "tags": "https://seshat.datasd.org/development_permits_tags/permits_project_tags_datasd.csv",
 }
 
