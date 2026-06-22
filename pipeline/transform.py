@@ -11,11 +11,10 @@ _RAW = _ROOT / "data" / "raw"
 _PROCESSED = _ROOT / "data" / "processed"
 _AGG = _ROOT / "data" / "aggregated"
 
-# Paths for raw CSVs
-_SET1_ACTIVE = str(_RAW / "set1_active.csv")
-_SET1_CLOSED = str(_RAW / "set1_closed.csv")
-_SET2_ACTIVE = str(_RAW / "set2_active.csv")
-_SET2_CLOSED = str(_RAW / "set2_closed.csv")
+# Paths for raw CSVs. Upstream consolidated the legacy/current systems into one
+# dataset split by status, so there are now just two permit files: active + closed.
+_ACTIVE = str(_RAW / "active.csv")
+_CLOSED = str(_RAW / "closed.csv")
 
 _PERMITS_PARQUET = str(_PROCESSED / "permits.parquet")
 
@@ -27,22 +26,34 @@ def transform() -> None:
 
     con = duckdb.connect()
 
-    # ── Stage 1: Load & normalize Set 1 (legacy system, 39 cols) ──
-    print("  Loading Set 1 (legacy) ...")
+    # ── Stage 1: Load active + closed (one consolidated dataset, 54 cols) ──
+    # The active and closed files are disjoint (a permit is in exactly one), so
+    # reading them together is a simple concatenation with no double-counting.
+    print("  Loading permits (active + closed) ...")
+    # Read every column as VARCHAR: PROJECT_ID and other ID columns mix numeric
+    # legacy values with prefixed values like "PRJ-1155742", so type auto-detection
+    # would infer BIGINT from the sample and then (with ignore_errors) silently drop
+    # every row that doesn't match. The normalize step below casts each field
+    # explicitly, so reading as text loses nothing and keeps the row count exact.
     con.execute(f"""
-        CREATE OR REPLACE TABLE set1_raw AS
+        CREATE OR REPLACE TABLE permits_raw AS
         SELECT * FROM read_csv(
-            ['{_SET1_ACTIVE}', '{_SET1_CLOSED}'],
+            ['{_ACTIVE}', '{_CLOSED}'],
             union_by_name = true,
             auto_detect = true,
+            all_varchar = true,
             ignore_errors = true
         )
     """)
-    row_count_1 = con.execute("SELECT COUNT(*) FROM set1_raw").fetchone()[0]
-    print(f"    Set 1 rows: {row_count_1:,}")
+    row_count = con.execute("SELECT COUNT(*) FROM permits_raw").fetchone()[0]
+    print(f"    Raw rows: {row_count:,}")
 
+    # ── Stage 2: Normalize to the canonical schema ──
+    # The consolidated dataset carries DU + ADU + JADU income-level columns for
+    # every row, so the income/ADU fields are wired to the real columns.
+    print("  Normalizing ...")
     con.execute("""
-        CREATE OR REPLACE TABLE set1 AS
+        CREATE OR REPLACE TABLE permits_union AS
         SELECT
             CAST(APPROVAL_ID AS VARCHAR)        AS approval_id,
             CAST(PROJECT_ID AS VARCHAR)         AS project_id,
@@ -52,96 +63,24 @@ def transform() -> None:
             TRIM(PROJECT_PROCESSING_CODE)       AS project_processing_code,
             TRIM(PROJECT_TITLE)                 AS project_title,
             TRIM(PROJECT_SCOPE)                 AS project_scope,
-            TRY_CAST(DATE_PROJECT_CREATE AS DATE)   AS date_project_create,
-            TRY_CAST(DATE_PROJECT_COMPLETE AS DATE) AS date_project_complete,
+            TRY_CAST(PROJECT_CREATE_DATE AS DATE)         AS date_project_create,
+            TRY_CAST(PROJECT_DEEMEDCOMPLETE_DATE AS DATE) AS date_project_complete,
             CAST(JOB_ID AS VARCHAR)             AS job_id,
-            TRIM(ADDRESS_JOB)                   AS address,
-            TRIM(CAST(JOB_APN AS VARCHAR))      AS apn,
+            TRIM(GIS_ADDRESS)                   AS address,
+            TRIM(CAST(GIS_APN AS VARCHAR))      AS apn,
             TRIM(CAST(JOB_BC_CODE AS VARCHAR))  AS bc_code,
             TRIM(JOB_BC_CODE_DESCRIPTION)       AS bc_code_description,
-            TRY_CAST(LAT_JOB AS DOUBLE)         AS lat,
-            TRY_CAST(LNG_JOB AS DOUBLE)         AS lng,
+            TRY_CAST(GIS_LATITUDE AS DOUBLE)    AS lat,
+            TRY_CAST(GIS_LONGITUDE AS DOUBLE)   AS lng,
             TRIM(APPROVAL_TYPE)                 AS approval_type,
             TRIM(APPROVAL_STATUS)               AS approval_status,
             TRIM(APPROVAL_SCOPE)                AS approval_scope,
-            TRY_CAST(DATE_APPROVAL_CREATE AS DATE)  AS date_approval_create,
-            TRY_CAST(DATE_APPROVAL_ISSUE AS DATE)   AS date_approval_issue,
-            TRY_CAST(DATE_APPROVAL_EXPIRE AS DATE)  AS date_approval_expire,
-            TRY_CAST(DATE_APPROVAL_CLOSE AS DATE)   AS date_approval_close,
+            TRY_CAST(APPROVAL_CREATE_DATE AS DATE)  AS date_approval_create,
+            TRY_CAST(APPROVAL_ISSUE_DATE AS DATE)   AS date_approval_issue,
+            TRY_CAST(APPROVAL_EXPIRE_DATE AS DATE)  AS date_approval_expire,
+            TRY_CAST(APPROVAL_CLOSE_DATE AS DATE)   AS date_approval_close,
             TRY_CAST(APPROVAL_VALUATION AS DOUBLE)  AS valuation,
             TRY_CAST(APPROVAL_DU_NET_CHANGE AS INTEGER) AS du_net_change,
-            TRY_CAST(APPROVAL_STORIES AS INTEGER)       AS stories,
-            TRY_CAST(APPROVAL_FLOOR_AREA AS DOUBLE)     AS floor_area,
-            TRY_CAST(APPROVAL_DU_EXTREMELY_LOW AS INTEGER)  AS du_extremely_low,
-            TRY_CAST(APPROVAL_DU_VERY_LOW AS INTEGER)       AS du_very_low,
-            TRY_CAST(APPROVAL_DU_LOW AS INTEGER)            AS du_low,
-            TRY_CAST(APPROVAL_DU_MODERATE AS INTEGER)       AS du_moderate,
-            TRY_CAST(APPROVAL_DU_ABOVE_MODERATE AS INTEGER) AS du_above_moderate,
-            TRY_CAST(APPROVAL_DU_FUTURE_DEMO AS INTEGER)    AS du_future_demo,
-            TRY_CAST(APPROVAL_DU_BONUS AS INTEGER)          AS du_bonus,
-            -- Set 1 has no ADU/JADU columns — NULL-fill
-            NULL::INTEGER AS adu_extremely_low,
-            NULL::INTEGER AS adu_very_low,
-            NULL::INTEGER AS adu_low,
-            NULL::INTEGER AS adu_moderate,
-            NULL::INTEGER AS adu_above_moderate,
-            NULL::INTEGER AS adu_bonus,
-            NULL::INTEGER AS adu_total,
-            NULL::INTEGER AS jadu_extremely_low,
-            NULL::INTEGER AS jadu_very_low,
-            NULL::INTEGER AS jadu_low,
-            NULL::INTEGER AS jadu_moderate,
-            NULL::INTEGER AS jadu_above_moderate,
-            NULL::INTEGER AS jadu_bonus,
-            NULL::INTEGER AS jadu_total,
-            TRIM(APPROVAL_PERMIT_HOLDER)        AS permit_holder,
-            'legacy'                            AS source_system
-        FROM set1_raw
-    """)
-
-    # ── Stage 2: Load & normalize Set 2 (current system, 46+ cols) ──
-    print("  Loading Set 2 (current) ...")
-    con.execute(f"""
-        CREATE OR REPLACE TABLE set2_raw AS
-        SELECT * FROM read_csv(
-            ['{_SET2_ACTIVE}', '{_SET2_CLOSED}'],
-            union_by_name = true,
-            auto_detect = true,
-            ignore_errors = true
-        )
-    """)
-    row_count_2 = con.execute("SELECT COUNT(*) FROM set2_raw").fetchone()[0]
-    print(f"    Set 2 rows: {row_count_2:,}")
-
-    con.execute("""
-        CREATE OR REPLACE TABLE set2 AS
-        SELECT
-            CAST(APPROVAL_ID AS VARCHAR)        AS approval_id,
-            CAST(PROJECT_ID AS VARCHAR)         AS project_id,
-            NULL::VARCHAR                       AS development_id,
-            NULL::VARCHAR                       AS project_type,
-            NULL::VARCHAR                       AS project_status,
-            TRIM(PROJECT_PROCESSING_CODE)       AS project_processing_code,
-            TRIM(PROJECT_TITLE)                 AS project_title,
-            TRIM(PROJECT_SCOPE)                 AS project_scope,
-            TRY_CAST(DATE_PROJECT_CREATE AS DATE)   AS date_project_create,
-            TRY_CAST(DATE_PROJECT_COMPLETE AS DATE) AS date_project_complete,
-            CAST(JOB_ID AS VARCHAR)             AS job_id,
-            TRIM(ADDRESS_JOB)                   AS address,
-            TRIM(CAST(JOB_APN AS VARCHAR))      AS apn,
-            TRIM(CAST(JOB_BC_CODE AS VARCHAR))  AS bc_code,
-            TRIM(JOB_BC_CODE_DESCRIPTION)       AS bc_code_description,
-            TRY_CAST(LAT_JOB AS DOUBLE)         AS lat,
-            TRY_CAST(LNG_JOB AS DOUBLE)         AS lng,
-            TRIM(APPROVAL_TYPE)                 AS approval_type,
-            TRIM(APPROVAL_STATUS)               AS approval_status,
-            TRIM(APPROVAL_SCOPE)                AS approval_scope,
-            TRY_CAST(DATE_APPROVAL_CREATE AS DATE)  AS date_approval_create,
-            TRY_CAST(DATE_APPROVAL_ISSUE AS DATE)   AS date_approval_issue,
-            TRY_CAST(DATE_APPROVAL_EXPIRE AS DATE)  AS date_approval_expire,
-            TRY_CAST(DATE_APPROVAL_CLOSE AS DATE)   AS date_approval_close,
-            TRY_CAST(APPROVAL_VALUATION AS DOUBLE)  AS valuation,
-            NULL::INTEGER                       AS du_net_change,
             TRY_CAST(APPROVAL_STORIES AS INTEGER)       AS stories,
             TRY_CAST(APPROVAL_FLOOR_AREA AS DOUBLE)     AS floor_area,
             TRY_CAST(APPROVAL_DU_EXTREMELY_LOW AS INTEGER)  AS du_extremely_low,
@@ -166,21 +105,14 @@ def transform() -> None:
             TRY_CAST(APPROVAL_JADU_BONUS AS INTEGER)         AS jadu_bonus,
             TRY_CAST(APPROVAL_JADU_TOTAL AS INTEGER)         AS jadu_total,
             TRIM(APPROVAL_PERMIT_HOLDER)        AS permit_holder,
-            'current'                           AS source_system
-        FROM set2_raw
-    """)
-
-    # ── Stage 3: Union into single permits table with derived fields ──
-    print("  Unioning sets + deriving fields ...")
-    con.execute("""
-        CREATE OR REPLACE TABLE permits_union AS
-        SELECT * FROM set1
-        UNION ALL
-        SELECT * FROM set2
+            -- Upstream merged the former legacy/current systems into one dataset;
+            -- the source_system distinction no longer exists, so it is a constant.
+            'consolidated'                      AS source_system
+        FROM permits_raw
     """)
 
     total_raw = con.execute("SELECT COUNT(*) FROM permits_union").fetchone()[0]
-    print(f"    Union total: {total_raw:,}")
+    print(f"    Normalized total: {total_raw:,}")
 
     # Derived fields + dedup + geo filter
     con.execute("""
